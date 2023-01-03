@@ -3,11 +3,17 @@
 //***************************************************************************************
 
 #include "d3dApp.h"
+#include <fcntl.h>
+#include <io.h>
+#include <fstream>
 #include <WindowsX.h>
 
 using Microsoft::WRL::ComPtr;
 using namespace std;
 using namespace DirectX;
+
+// maximum mumber of lines the output console should have
+static const WORD MAX_CONSOLE_LINES = 500;
 
 LRESULT CALLBACK
 MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -422,6 +428,9 @@ bool D3DApp::InitDirect3D()
 			debugController->EnableDebugLayer();
 		}
 	}
+
+	// Console 활성화
+	AllocateConsole();
 #endif
 
 	ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&mdxgiFactory)));
@@ -444,28 +453,27 @@ bool D3DApp::InitDirect3D()
 			IID_PPV_ARGS(&md3dDevice)));
 	}
 
-	ThrowIfFailed(md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-		IID_PPV_ARGS(&mFence)));
+	ThrowIfFailed(md3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
 
+	// Render Target View
 	mRtvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+	// Depth Stencil Descriptor
 	mDsvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+	// Contant Buffer View, Shader Resource View, Unordered Acces View
 	mCbvSrvUavDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // Check 4X MSAA quality support for our back buffer format.
-    // All Direct3D 11 capable devices support 4X MSAA for all render 
-    // target formats, so we only need to check quality support.
-
+    // back buffer에서 4XMSAA가 지원되는지 명시적으로 점검
 	D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels;
 	msQualityLevels.Format = mBackBufferFormat;
 	msQualityLevels.SampleCount = 4;
 	msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
 	msQualityLevels.NumQualityLevels = 0;
-	ThrowIfFailed(md3dDevice->CheckFeatureSupport(
-		D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
-		&msQualityLevels,
-		sizeof(msQualityLevels)));
-
-    m4xMsaaQuality = msQualityLevels.NumQualityLevels;
+	// 기능 점검은 CheckFeatureSupprt를 이용해서 진행함.
+	ThrowIfFailed(md3dDevice->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+		&msQualityLevels, sizeof(msQualityLevels)));
+	
+	// 반환된 품질 수준을 점검함.
+	m4xMsaaQuality = msQualityLevels.NumQualityLevels;
 	assert(m4xMsaaQuality > 0 && "Unexpected MSAA quality level.");
 	
 #ifdef _DEBUG
@@ -530,6 +538,55 @@ void D3DApp::CreateSwapChain()
 		mCommandQueue.Get(),
 		&sd, 
 		mSwapChain.GetAddressOf()));
+}
+
+void D3DApp::AllocateConsole()
+{
+	int hConHandle;
+	long lStdHandle;
+
+	CONSOLE_SCREEN_BUFFER_INFO coninfo;
+
+	FILE* fp;
+
+	// allocate a console for this app
+	AllocConsole();
+
+	// set the screen buffer to be big enough to let us scroll text
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &coninfo);
+
+	coninfo.dwSize.Y = MAX_CONSOLE_LINES;
+
+	SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), coninfo.dwSize);
+
+	// redirect unbuffered STDOUT to the console
+
+	lStdHandle = (long)GetStdHandle(STD_OUTPUT_HANDLE);
+	hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
+
+	fp = _fdopen(hConHandle, "w");
+	*stdout = *fp;
+	setvbuf(stdout, NULL, _IONBF, 0);
+
+	// redirect unbuffered STDIN to the console
+	lStdHandle = (long)GetStdHandle(STD_INPUT_HANDLE);
+	hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
+
+	fp = _fdopen(hConHandle, "r");
+
+	*stdin = *fp;
+	setvbuf(stdin, NULL, _IONBF, 0);
+
+	// redirect unbuffered STDERR to the console
+	lStdHandle = (long)GetStdHandle(STD_ERROR_HANDLE);
+	hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
+	fp = _fdopen(hConHandle, "w");
+	*stderr = *fp;
+	setvbuf(stderr, NULL, _IONBF, 0);
+
+	// make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog 
+	// point to console as well
+	ios::sync_with_stdio();
 }
 
 void D3DApp::FlushCommandQueue()
